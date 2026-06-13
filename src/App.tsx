@@ -11,7 +11,7 @@ export default function App() {
   useEffect(() => {
     const fetchPrice = async () => {
       try {
-        const res = await fetch("http://localhost:3001/price");
+        const res = await fetch("https://gold-ai-backend-pmtf.onrender.com/price");
         const data = await res.json();
 
         if (data?.price) {

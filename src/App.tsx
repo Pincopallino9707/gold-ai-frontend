@@ -1,24 +1,31 @@
 import { useEffect, useMemo, useState } from "react";
 
 export default function App() {
-  const [price, setPrice] = useState(2350);
+  const [price, setPrice] = useState<number | null>(null);
   const [history, setHistory] = useState<number[]>([]);
   const [signal, setSignal] = useState<"BUY" | "SELL" | "WAIT">("WAIT");
-  const [structure, setStructure] = useState("NEUTRAL");
-  const [trend, setTrend] = useState<"BULL" | "BEAR">("BULL");
 
-  // 📡 PREZZO DAL BACKEND NODE
+  // 📡 FETCH PREZZO LIVE
   useEffect(() => {
     const fetchPrice = async () => {
       try {
-        const res = await fetch("https://gold-ai-backend-pmtf.onrender.com/price");
+        const res = await fetch(
+          "https://gold-ai-backend-pmtf.onrender.com/price"
+        );
+
         const data = await res.json();
 
-        if (data?.price) {
-          setPrice(data.price);
+        // 🔍 DEBUG (IMPORTANTISSIMO)
+        console.log("API RESPONSE:", data);
+        console.log("PRICE FROM API:", data?.data?.price);
+
+        const priceValue = Number(data?.data?.price);
+
+        if (!isNaN(priceValue)) {
+          setPrice(priceValue);
         }
       } catch (err) {
-        console.log("Errore fetch backend:", err);
+        console.log("FETCH ERROR:", err);
       }
     };
 
@@ -28,96 +35,86 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // 📊 storico prezzi
+  // 📊 HISTORY
   useEffect(() => {
-    setHistory((prev) => {
-      const updated = [...prev, price];
-      return updated.slice(-40);
-    });
+    if (price !== null) {
+      setHistory((prev) => [...prev.slice(-100), price]);
+    }
   }, [price]);
 
-  // 📈 swing high / low
-  const swingHigh = useMemo(
-    () => Math.max(...history, price),
-    [history, price]
-  );
+  // 📈 EMA
+  const ema = (period: number) => {
+    if (history.length === 0) return price || 0;
 
-  const swingLow = useMemo(
-    () => Math.min(...history, price),
-    [history, price]
-  );
+    const k = 2 / (period + 1);
 
-  // 📉 media trend
-  const avg = useMemo(() => {
-    if (history.length === 0) return price;
-    return history.reduce((a, b) => a + b, 0) / history.length;
-  }, [history, price]);
+    return history.reduce((acc, val, i) => {
+      if (i === 0) return val;
+      return val * k + acc * (1 - k);
+    }, history[0]);
+  };
 
-  // ⚡ momentum
+  const ema9 = useMemo(() => ema(9), [history]);
+  const ema21 = useMemo(() => ema(21), [history]);
+  const ema50 = useMemo(() => ema(50), [history]);
+
+  // 📊 RSI
+  const rsi = useMemo(() => {
+    if (history.length < 10) return 50;
+
+    let gains = 0;
+    let losses = 0;
+
+    for (let i = 1; i < history.length; i++) {
+      const diff = history[i] - history[i - 1];
+      if (diff >= 0) gains += diff;
+      else losses += Math.abs(diff);
+    }
+
+    const rs = gains / (losses || 1);
+    return 100 - 100 / (1 + rs);
+  }, [history]);
+
+  // ⚡ MOMENTUM
   const momentum = useMemo(() => {
-    if (history.length < 2) return 0;
+    if (history.length < 2 || price === null) return 0;
     return price - history[history.length - 2];
   }, [history, price]);
 
-  // 🧠 trend detection
+  // 🧠 SIGNAL ENGINE
   useEffect(() => {
-    if (price > avg) setTrend("BULL");
-    else setTrend("BEAR");
-  }, [price, avg]);
+    if (price === null) return;
 
-  // 🧩 STRUCTURE (BOS + CHoCH semplificato)
-  useEffect(() => {
-    const mid = (swingHigh + swingLow) / 2;
-
-    if (price >= swingHigh - 0.4 && trend === "BULL") {
-      setStructure("BULLISH_BOS");
-    } else if (price <= swingLow + 0.4 && trend === "BEAR") {
-      setStructure("BEARISH_BOS");
-    } else if (trend === "BULL" && price < mid) {
-      setStructure("CHoCH_BEAR");
-    } else if (trend === "BEAR" && price > mid) {
-      setStructure("CHoCH_BULL");
-    } else {
-      setStructure("RANGE");
-    }
-  }, [price, swingHigh, swingLow, trend]);
-
-  // 🎯 SIGNAL ENGINE (SMC CORE)
-  useEffect(() => {
     let score = 0;
 
-    if (trend === "BULL") score += 1;
-    if (trend === "BEAR") score -= 1;
+    if (ema9 > ema21) score += 1;
+    if (ema21 > ema50) score += 1;
+    if (ema9 < ema21) score -= 1;
 
-    if (momentum > 0.6) score += 1;
-    if (momentum < -0.6) score -= 1;
+    if (rsi > 60) score += 1;
+    if (rsi < 40) score -= 1;
 
-    if (structure === "BULLISH_BOS") score += 2;
-    if (structure === "BEARISH_BOS") score -= 2;
-
-    if (structure === "CHoCH_BULL") score += 1;
-    if (structure === "CHoCH_BEAR") score -= 1;
+    if (momentum > 0.5) score += 1;
+    if (momentum < -0.5) score -= 1;
 
     if (score >= 3) setSignal("BUY");
     else if (score <= -3) setSignal("SELL");
     else setSignal("WAIT");
-  }, [price, avg, momentum, structure, trend]);
+  }, [ema9, ema21, ema50, rsi, momentum, price]);
 
   return (
     <div style={{ padding: 20, fontFamily: "Arial" }}>
-      <h1>Gold AI Assistant (LIVE SMC)</h1>
+      <h1>Gold AI PRO v2</h1>
 
       <h2>XAU/USD</h2>
 
-      <p>💰 Price: {price}</p>
+      <p>💰 Price: {price ?? "loading..."}</p>
 
-      <p>Trend: {trend}</p>
-      <p>Structure: {structure}</p>
+      <p>EMA 9: {ema9.toFixed(2)}</p>
+      <p>EMA 21: {ema21.toFixed(2)}</p>
+      <p>EMA 50: {ema50.toFixed(2)}</p>
 
-      <p>Swing High: {swingHigh.toFixed(2)}</p>
-      <p>Swing Low: {swingLow.toFixed(2)}</p>
-
-      <p>Average: {avg.toFixed(2)}</p>
+      <p>RSI: {rsi.toFixed(2)}</p>
       <p>Momentum: {momentum.toFixed(2)}</p>
 
       <h2

@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 
 export default function App() {
+  const [marketData, setMarketData] = useState<any>(null);
   const [price, setPrice] = useState<number | null>(null);
   const [history, setHistory] = useState<number[]>([]);
   const [signal, setSignal] = useState<"BUY" | "SELL" | "WAIT">("WAIT");
 
-  // 📡 FETCH PREZZO LIVE
   useEffect(() => {
     const fetchPrice = async () => {
       try {
@@ -13,16 +13,18 @@ export default function App() {
           "https://gold-ai-backend-pmtf.onrender.com/price"
         );
 
-        const data = await res.json();
+        const json = await res.json();
 
-        // 🔍 DEBUG (IMPORTANTISSIMO)
-        console.log("API RESPONSE:", data);
-        console.log("PRICE FROM API:", data?.data?.price);
+        console.log("API RESPONSE:", json);
 
-        const priceValue = Number(data?.data?.price);
+        if (json?.success) {
+          setMarketData(json.data);
 
-        if (!isNaN(priceValue)) {
-          setPrice(priceValue);
+          const livePrice = Number(json.data.price);
+
+          if (!isNaN(livePrice)) {
+            setPrice(livePrice);
+          }
         }
       } catch (err) {
         console.log("FETCH ERROR:", err);
@@ -30,19 +32,18 @@ export default function App() {
     };
 
     fetchPrice();
+
     const interval = setInterval(fetchPrice, 5000);
 
     return () => clearInterval(interval);
   }, []);
 
-  // 📊 HISTORY
   useEffect(() => {
     if (price !== null) {
       setHistory((prev) => [...prev.slice(-100), price]);
     }
   }, [price]);
 
-  // 📈 EMA
   const ema = (period: number) => {
     if (history.length === 0) return price || 0;
 
@@ -58,7 +59,6 @@ export default function App() {
   const ema21 = useMemo(() => ema(21), [history]);
   const ema50 = useMemo(() => ema(50), [history]);
 
-  // 📊 RSI
   const rsi = useMemo(() => {
     if (history.length < 10) return 50;
 
@@ -67,40 +67,64 @@ export default function App() {
 
     for (let i = 1; i < history.length; i++) {
       const diff = history[i] - history[i - 1];
+
       if (diff >= 0) gains += diff;
       else losses += Math.abs(diff);
     }
 
     const rs = gains / (losses || 1);
+
     return 100 - 100 / (1 + rs);
   }, [history]);
 
-  // ⚡ MOMENTUM
   const momentum = useMemo(() => {
     if (history.length < 2 || price === null) return 0;
+
     return price - history[history.length - 2];
   }, [history, price]);
 
-  // 🧠 SIGNAL ENGINE
+  const trend = useMemo(() => {
+    if (!marketData) return "NEUTRAL";
+
+    return marketData.price > marketData.open
+      ? "BULLISH"
+      : "BEARISH";
+  }, [marketData]);
+
+  const dailyRange = useMemo(() => {
+    if (!marketData) return 0;
+
+    return marketData.high - marketData.low;
+  }, [marketData]);
+
+  const aiScore = useMemo(() => {
+    if (!marketData) return 50;
+
+    let score = 50;
+
+    if (marketData.price > marketData.open) score += 15;
+    else score -= 15;
+
+    if (marketData.price > marketData.prevClose) score += 15;
+    else score -= 15;
+
+    if (ema9 > ema21) score += 10;
+    if (ema21 > ema50) score += 10;
+
+    if (rsi > 60) score += 10;
+    if (rsi < 40) score -= 10;
+
+    if (momentum > 0) score += 5;
+    if (momentum < 0) score -= 5;
+
+    return Math.max(0, Math.min(100, score));
+  }, [marketData, ema9, ema21, ema50, rsi, momentum]);
+
   useEffect(() => {
-    if (price === null) return;
-
-    let score = 0;
-
-    if (ema9 > ema21) score += 1;
-    if (ema21 > ema50) score += 1;
-    if (ema9 < ema21) score -= 1;
-
-    if (rsi > 60) score += 1;
-    if (rsi < 40) score -= 1;
-
-    if (momentum > 0.5) score += 1;
-    if (momentum < -0.5) score -= 1;
-
-    if (score >= 3) setSignal("BUY");
-    else if (score <= -3) setSignal("SELL");
+    if (aiScore >= 70) setSignal("BUY");
+    else if (aiScore <= 30) setSignal("SELL");
     else setSignal("WAIT");
-  }, [ema9, ema21, ema50, rsi, momentum, price]);
+  }, [aiScore]);
 
   return (
     <div style={{ padding: 20, fontFamily: "Arial" }}>
@@ -109,6 +133,31 @@ export default function App() {
       <h2>XAU/USD</h2>
 
       <p>💰 Price: {price ?? "loading..."}</p>
+
+      {marketData && (
+        <>
+          <p>📈 Open: {marketData.open}</p>
+          <p>⬆️ High: {marketData.high}</p>
+          <p>⬇️ Low: {marketData.low}</p>
+          <p>📊 Daily Range: {dailyRange.toFixed(2)}</p>
+
+          <p>
+            🔥 Trend:{" "}
+            <strong
+              style={{
+                color:
+                  trend === "BULLISH" ? "green" : "red",
+              }}
+            >
+              {trend}
+            </strong>
+          </p>
+
+          <p>🤖 AI Score: {aiScore}/100</p>
+        </>
+      )}
+
+      <hr />
 
       <p>EMA 9: {ema9.toFixed(2)}</p>
       <p>EMA 21: {ema21.toFixed(2)}</p>
